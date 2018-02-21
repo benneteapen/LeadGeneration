@@ -246,7 +246,7 @@ multiplier <- function(sub)
 
 #Connect to Red Shift Table
 driver <- JDBC("com.amazon.redshift.jdbc41.Driver", "RedshiftJDBC41-no-awssdk-1.2.10.1009.jar", identifier.quote="`")
-url <- "jdbc:redshift://rhdsrsprod.cpe1poooghvl.us-west-2.redshift.amazonaws.com:5439/rhdsrs?user=vdutta&password=RHdsEUys7"
+url <- "jdbc:redshift://rhdsrsprod.cpe1poooghvl.us-west-2.redshift.amazonaws.com:5439/rhdsrs?user=xyz&password=123"
 conn <- dbConnect(driver, url)
 
 #Read Salesforce download from local drive
