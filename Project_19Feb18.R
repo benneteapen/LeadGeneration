@@ -3,42 +3,64 @@ library(rJava)
 library(stringr)
 library(lubridate)
 library(dplyr)
+library(xgboost)
 
 subQuery <- function(accno)
 {
   subscriptions <- dbGetQuery(conn,sprintf("SELECT
-                                           rsds_ops_renewals.tbl_subscriptions.acc_num,
-                                           rsds_ops_renewals.tbl_subscriptions.sku_num,
-                                           tbl_product_msrp.sku_desc,
-                                           rsds_ops_renewals.tbl_subscriptions.sku_qty,
-                                           rsds_ops_renewals.tbl_subscriptions.service_start_date,
-                                           rsds_ops_renewals.tbl_subscriptions.service_end_date
-                                           FROM
-                                           rsds_ops_renewals.tbl_subscriptions
-                                           LEFT OUTER JOIN 
-                                           rsds_ops_renewals.tbl_product_msrp
-                                           ON 
-                                           rsds_ops_renewals.tbl_subscriptions.sku_num = rsds_ops_renewals.tbl_product_msrp.sku_num
-                                           WHERE
-                                           rsds_ops_renewals.tbl_subscriptions.acc_num = %s", accno))
+                                             rsds_ops_renewals.tbl_subscriptions.acc_num,
+                                             rsds_ops_renewals.tbl_subscriptions.sku_num,
+                                             tbl_product_msrp.sku_desc,
+                                             rsds_ops_renewals.tbl_subscriptions.sku_qty,
+                                             rsds_ops_renewals.tbl_subscriptions.service_start_date,
+                                             rsds_ops_renewals.tbl_subscriptions.service_end_date
+                                            FROM
+                                             rsds_ops_renewals.tbl_subscriptions
+                                            LEFT OUTER JOIN 
+                                             rsds_ops_renewals.tbl_product_msrp
+                                            ON 
+                                             rsds_ops_renewals.tbl_subscriptions.sku_num = rsds_ops_renewals.tbl_product_msrp.sku_num
+                                            WHERE
+                                             rsds_ops_renewals.tbl_subscriptions.acc_num = %s", accno))
   return(subscriptions)
 }
 
 chkQuery <- function(accno)
 {
   checkins <- dbGetQuery(conn,sprintf("SELECT
-                                      rsds_ops_renewals.tbl_rhn_candlepin_checkin.acc_num,
-                                      rsds_ops_renewals.tbl_rhn_candlepin_checkin.hostname,
-                                      rsds_ops_renewals.tbl_rhn_candlepin_checkin.system_id,
-                                      rsds_ops_renewals.tbl_rhn_candlepin_checkin.profile_create_date,
-                                      rsds_ops_renewals.tbl_rhn_candlepin_checkin.system_last_checkin_date,
-                                      rsds_ops_renewals.tbl_rhn_candlepin_checkin.consumer_type,
-                                      rsds_ops_renewals.tbl_rhn_candlepin_checkin.system_type
-                                      FROM
-                                      rsds_ops_renewals.tbl_rhn_candlepin_checkin
-                                      WHERE
-                                      rsds_ops_renewals.tbl_rhn_candlepin_checkin.acc_num = %s", accno))
+                                        rsds_ops_renewals.tbl_rhn_candlepin_checkin.acc_num,
+                                        rsds_ops_renewals.tbl_rhn_candlepin_checkin.hostname,
+                                        rsds_ops_renewals.tbl_rhn_candlepin_checkin.system_id,
+                                        rsds_ops_renewals.tbl_rhn_candlepin_checkin.profile_create_date,
+                                        rsds_ops_renewals.tbl_rhn_candlepin_checkin.system_last_checkin_date,
+                                        rsds_ops_renewals.tbl_rhn_candlepin_checkin.consumer_type,
+                                        rsds_ops_renewals.tbl_rhn_candlepin_checkin.system_type
+                                       FROM
+                                        rsds_ops_renewals.tbl_rhn_candlepin_checkin
+                                       WHERE
+                                        rsds_ops_renewals.tbl_rhn_candlepin_checkin.acc_num = %s", accno))
   return(checkins)
+}
+
+chkViews <- function(accno,dte)
+{
+  month(dte) <- month(dte) + 10
+  fyq <- paste('FY',year(dte),'-Q',quarter(dte),sep='')
+  views <- dbGetQuery(conn,sprintf("SELECT SUM(seap.portal.views) 
+                                    FROM seap.portal 
+                                    WHERE seap.portal.fyq = fyq
+                                    AND seap.portal.customer_number = %s", accno))
+  return(views[1,1])
+}
+
+chkCases <- function(accno,dte)
+{
+  month(dte) <- month(dte) + 10
+  fyq <- paste('FY',year(dte),'-Q',quarter(dte),sep='')
+  cases <- dbGetQuery(conn,sprintf("SELECT COUNT(*) 
+                                    FROM seap.cases 
+                                    WHERE seap.cases.fyq = fyq
+                                    AND seap.cases.customer_number = %s", accno))
 }
 
 CleanCheckin <- function(cl_chkin)
@@ -49,92 +71,6 @@ CleanCheckin <- function(cl_chkin)
   tmpChk2 <- na.omit(tmpChk2)
   tmpChk2 <- within(tmpChk2,rm(x))
   return(tmpChk2)
-}
-
-LogReg <- function(LData)
-{
-  LData <- fd1[5:9]
-  LData <- LData[-4]
-  # LData <- finDataset[,c(5,6,8,9,11)]
-  
-  # Encoding the target feature as factor
-  LData$DealSuccess <- factor(LData$DealSuccess, levels = c(0, 1))
-  # LData$yum_mrepo_Spacewalk_cobbler <- factor(LData$yum_mrepo_Spacewalk_cobbler, levels = c(0, 1))
-  
-  # Splitting the dataset into the Training set and Test set
-  library(caTools)
-  split = sample.split(LData$DealSuccess, SplitRatio = 0.75)
-  training_set = subset(LData, split == TRUE)
-  test_set = subset(LData, split == FALSE)
-  
-  # Feature Scaling
-  training_set[1:3] = scale(training_set[1:3])
-  test_set[1:3] = scale(test_set[1:3])
-  
-  # Fitting Logistic Regression to the Training set
-  classifier = glm(formula = DealSuccess ~ .,
-                   family = binomial,
-                   data = training_set)
-  
-  # Predicting the Test set results
-  prob_pred = predict(classifier, type = 'response', newdata = test_set[1:3])
-  y_pred = ifelse(prob_pred > 0.5, 1, 0)
-  
-  # Making the Confusion Matrix
-  cm = table(test_set[,4], y_pred > 0.5)
-}
-
-DecisionTree <- function(ld)
-{
-  ld <- fd1[5:9]
-  ld <- ld[-4]
-  
-  ld$DealSuccess <- factor(ld$DealSuccess, levels = c(0, 1))
-  
-  library(caTools)
-  set.seed(123)
-  split = sample.split(ld$DealSuccess, SplitRatio = 0.75)
-  training_set = subset(ld, split == TRUE)
-  test_set = subset(ld, split == FALSE)
-  
-  # Feature Scaling
-  training_set[1:3] = scale(training_set[1:3])
-  test_set[1:3] = scale(test_set[1:3])
-  
-  library(rpart)
-  classifier = rpart(formula = DealSuccess ~ .,
-                     data = training_set)
-  
-  y_pred = predict(classifier, newdata = test_set[-4], type = 'class')
-  
-  cm = table(test_set[, 4], y_pred)
-}
-
-RandomForest <- function(ld)
-{
-  ld <- fd1[5:9]
-  ld <- ld[-4]
-  
-  ld$DealSuccess <- factor(ld$DealSuccess, levels = c(0, 1))
-  
-  library(caTools)
-  set.seed(123)
-  split = sample.split(ld$DealSuccess, SplitRatio = 0.75)
-  training_set = subset(ld, split == TRUE)
-  test_set = subset(ld, split == FALSE)
-  
-  training_set[1:3] = scale(training_set[1:3])
-  test_set[1:3] = scale(test_set[1:3])
-  
-  library(randomForest)
-  set.seed(123)
-  classifier = randomForest(x = training_set[-4],
-                            y = training_set$DealSuccess,
-                            ntree = 500)
-  
-  y_pred = predict(classifier, newdata = test_set[-4])
-  
-  cm = table(test_set[, 4], y_pred)
 }
 
 CleanDataset <- function(DS)
@@ -176,57 +112,57 @@ multiplier <- function(sub)
   
   one1 <- ifelse(grepl("1 GUEST",toupper(sub$sku_desc)) | grepl("1 VIRTUAL MACHINE",toupper(sub$sku_desc)) == TRUE,sub$sku_qty,0)
   one2 <- ifelse(!grepl("DESKTOP, SELF-SUPPORT",toupper(sub$sku_desc)) &
-                 !grepl("1 GUEST",toupper(sub$sku_desc)) &
-                 !grepl("1 VIRTUAL MACHINE",toupper(sub$sku_desc)) &
-                 !grepl("WORKSTATION",toupper(sub$sku_desc)) &
-                 !grepl("UNLIMITED",toupper(sub$sku_desc)) &
-                  grepl("SELF-SUPPORT",toupper(sub$sku_desc)) == TRUE,
-                  sub$sku_qty,0)
-  one3 <- ifelse(!grepl("DEVELOPER WORKSTATION, ENTERPRISE",toupper(sub$sku_desc)) &
-                 !grepl("DEVELOPER WORKSTATION, PROFESSIONAL",toupper(sub$sku_desc)) &
-                  grepl("WORKSTATION",toupper(sub$sku_desc)) == TRUE,
-                  sub$sku_qty,0)
-  one4 <- ifelse(grepl("OPENSHIFT",toupper(sub$sku_desc)) &
-                 grepl("2 Core",toupper(sub$sku_desc)) &
-                (grepl("ENTERPRISE",toupper(sub$sku_desc)) |
-                 grepl("CONTAINER PLATFORM",toupper(sub$sku_desc))) == TRUE,
+                   !grepl("1 GUEST",toupper(sub$sku_desc)) &
+                   !grepl("1 VIRTUAL MACHINE",toupper(sub$sku_desc)) &
+                   !grepl("WORKSTATION",toupper(sub$sku_desc)) &
+                   !grepl("UNLIMITED",toupper(sub$sku_desc)) &
+                   grepl("SELF-SUPPORT",toupper(sub$sku_desc)) == TRUE,
                  sub$sku_qty,0)
-    two <- ifelse(grepl("PHYSICAL OR VIRTUAL NODES",toupper(sub$sku_desc)) |
+  one3 <- ifelse(!grepl("DEVELOPER WORKSTATION, ENTERPRISE",toupper(sub$sku_desc)) &
+                   !grepl("DEVELOPER WORKSTATION, PROFESSIONAL",toupper(sub$sku_desc)) &
+                   grepl("WORKSTATION",toupper(sub$sku_desc)) == TRUE,
+                 sub$sku_qty,0)
+  one4 <- ifelse(grepl("OPENSHIFT",toupper(sub$sku_desc)) &
+                   grepl("2 Core",toupper(sub$sku_desc)) &
+                   (grepl("ENTERPRISE",toupper(sub$sku_desc)) |
+                      grepl("CONTAINER PLATFORM",toupper(sub$sku_desc))) == TRUE,
+                 sub$sku_qty,0)
+  two <- ifelse(grepl("PHYSICAL OR VIRTUAL NODES",toupper(sub$sku_desc)) |
                   grepl("DEVELOPER WORKSTATION, PROFESSIONAL",toupper(sub$sku_desc)) == TRUE,
-                  sub$sku_qty,0)
+                sub$sku_qty,0)
   four1 <- ifelse(!grepl("LPAR",toupper(sub$sku_desc)) &
-                   grepl("4 GUEST",toupper(sub$sku_desc)) == TRUE,
-                   sub$sku_qty,0)
+                    grepl("4 GUEST",toupper(sub$sku_desc)) == TRUE,
+                  sub$sku_qty,0)
   four2 <- ifelse(grepl("DEVELOPER WORKSTATION, ENTERPRISE",toupper(sub$sku_desc)) == TRUE,
                   sub$sku_qty,0)
   four3 <- ifelse(grepl("4",toupper(sub$sku_desc)) &
-                  grepl("LPAR",toupper(sub$sku_desc)) == TRUE,
+                    grepl("LPAR",toupper(sub$sku_desc)) == TRUE,
                   sub$sku_qty,0)
   five <- ifelse(grepl("HYPERSCALE",toupper(sub$sku_desc)) == TRUE,
                  sub$sku_qty,0)
   ten <- ifelse(grepl("10 GUEST",toupper(sub$sku_desc)) == TRUE,
                 sub$sku_qty,0)
   fifteen <- ifelse(grepl("15",toupper(sub$sku_desc)) &
-                    grepl("LPAR",toupper(sub$sku_desc)) == TRUE,
+                      grepl("LPAR",toupper(sub$sku_desc)) == TRUE,
                     sub$sku_qty,0)
   sixteen1 <- ifelse(grepl("UNLIMITED GUEST",toupper(sub$sku_desc)) |
-                     grepl("VIRTUAL DATACENTER",toupper(sub$sku_desc)) |
-                     grepl("DEVELOPER SUITE",toupper(sub$sku_desc)) |   
-                     grepl("SMART VIRTUALIZATION",toupper(sub$sku_desc)) == TRUE,
+                       grepl("VIRTUAL DATACENTER",toupper(sub$sku_desc)) |
+                       grepl("DEVELOPER SUITE",toupper(sub$sku_desc)) |   
+                       grepl("SMART VIRTUALIZATION",toupper(sub$sku_desc)) == TRUE,
                      sub$sku_qty,0)
   sixteen2 <- ifelse(!grepl("RED HAT CLOUD INFRASTRUCTURE (WITHOUT GUEST OS)",toupper(sub$sku_desc)) &
-                      grepl("RED HAT CLOUD INFRASTRUCTURE",toupper(sub$sku_desc)) == TRUE,
-                      sub$sku_qty,0)
+                       grepl("RED HAT CLOUD INFRASTRUCTURE",toupper(sub$sku_desc)) == TRUE,
+                     sub$sku_qty,0)
   sixteen3 <- ifelse(!grepl("OPENSTACK PLATFORM (WITHOUT GUEST OS)",toupper(sub$sku_desc)) &
-                      grepl("OPENSTACK PLATFORM",toupper(sub$sku_desc)) == TRUE,
-                      sub$sku_qty,0)
+                       grepl("OPENSTACK PLATFORM",toupper(sub$sku_desc)) == TRUE,
+                     sub$sku_qty,0)
   sixteen4 <- ifelse(!grepl("CLOUD SUITE (WITHOUT GUEST OS)",toupper(sub$sku_desc)) &
-                      grepl("CLOUD SUITE",toupper(sub$sku_desc)) == TRUE,
-                      sub$sku_qty,0)
+                       grepl("CLOUD SUITE",toupper(sub$sku_desc)) == TRUE,
+                     sub$sku_qty,0)
   sixteen5 <- ifelse(grepl("OPENSHIFT",toupper(sub$sku_desc)) &
-                     grepl("(1-2 SOCKETS)",toupper(sub$sku_desc)) &
-                    (grepl("ENTERPRISE",toupper(sub$sku_desc)) |
-                     grepl("CONTAINER PLATFORM",toupper(sub$sku_desc))) == TRUE,
+                       grepl("(1-2 SOCKETS)",toupper(sub$sku_desc)) &
+                       (grepl("ENTERPRISE",toupper(sub$sku_desc)) |
+                          grepl("CONTAINER PLATFORM",toupper(sub$sku_desc))) == TRUE,
                      sub$sku_qty,0)
   fifty <- ifelse(grepl("(50 PACK)",toupper(sub$sku_desc)) == TRUE,
                   sub$sku_qty,0)
@@ -235,41 +171,92 @@ multiplier <- function(sub)
   fourhundred <- ifelse(grepl("DEVELOPER SUPPORT",toupper(sub$sku_desc)) == TRUE,
                         sub$sku_qty,0)
   return (one1 + one2 + one3 + one4 +
-           two * 3 +
-           (four1 + four2 + four3) * 4 +
-           five * 5 +
-           ten * 10 +
-           fifteen * 15 +
-           (sixteen1 + sixteen2 + sixteen3 + sixteen4 + sixteen5)*16 )
+            two * 3 +
+            (four1 + four2 + four3) * 4 +
+            five * 5 +
+            ten * 10 +
+            fifteen * 15 +
+            (sixteen1 + sixteen2 + sixteen3 + sixteen4 + sixteen5)*16 )
 }
 
+XGBoost <- function(xg)
+{
+  # Importing the dataset
+  dataset <-  fd1
+  dataset <-  dataset[4:13]
+  
+  # Encoding the categorical variables as factors
+  dataset$Geo = as.numeric(factor(dataset$Geo,
+                                  levels = c('EMEA', 'LATAM', 'APAC','NA'),
+                                  labels = c(1, 2, 3, 4)))
+  
+  
+  # Splitting the dataset into the Training set and Test set
+  # install.packages('caTools')
+  library(caTools)
+  split = sample.split(dataset$DealSuccess, SplitRatio = 0.8)
+  training_set = subset(dataset, split == TRUE)
+  test_set = subset(dataset, split == FALSE)
+  
+  # Fitting XGBoost to the Training set
+  # install.packages('xgboost')
+  library(xgboost)
+  classifier = xgboost(data = as.matrix(training_set[-10]), label = training_set$DealSuccess, nrounds = 115)
+  
+  # Predicting the Test set results
+  y_pred = predict(classifier, newdata = as.matrix(test_set[-10]))
+  y_pred = (y_pred >= 0.5)
+  
+  # Making the Confusion Matrix
+  cm = table(test_set[, 10], y_pred)
+  
+  # Applying k-Fold Cross Validation
+  # install.packages('caret')
+  library(caret)
+  folds = createFolds(training_set$DealSuccess, k = 10)
+  cv <-  lapply(folds, function(x) {
+    training_fold = training_set[-x, ]
+    test_fold = training_set[x, ]
+    classifier = xgboost(data = as.matrix(training_set[-10]), label = training_set$DealSuccess, nrounds = 115)
+    y_pred = predict(classifier, newdata = as.matrix(test_fold[-10]))
+    y_pred = (y_pred >= 0.5)
+    cm = table(test_fold[, 10], y_pred)
+    accuracy = (cm[1,1] + cm[2,2]) / (cm[1,1] + cm[2,2] + cm[1,2] + cm[2,1])
+    return(accuracy)
+  })
+  accuracy = mean(as.numeric(cv))
+}
 
 #Connect to Red Shift Table
 driver <- JDBC("com.amazon.redshift.jdbc41.Driver", "RedshiftJDBC41-no-awssdk-1.2.10.1009.jar", identifier.quote="`")
-url <- "jdbc:redshift://rhdsrsprod.cpe1poooghvl.us-west-2.redshift.amazonaws.com:5439/rhdsrs?user=xyz&password=123"
+url <- "jdbc:redshift://rhdsrsprod.cpe1poooghvl.us-west-2.redshift.amazonaws.com:5439/rhdsrs?user=beapen&password=RHdsEUys7"
 conn <- dbConnect(driver, url)
 
-#Read Salesforce download from local drive
+#Read Salesforce download from local drive ----------- TRAIN DATASET ----------------
 dataset <- read.csv("C:/Users/beapen/Documents/Process Related/PROJECT/Closed_SEAP_Deals.csv")
 
 #Clean the Dataset
-finDataset <- CleanDataset(dataset)[c(1,14,4,7,15)]
+TrainDataset <- CleanDataset(dataset)[c(1,14,4,7,15)]
 
 #----------------Initialiation-----------------
-finDataset$Checkin_OverDep <- numeric(nrow(finDataset))
-finDataset$yum_mrepo_Spacewalk_cobbler <- character(nrow(finDataset))
-finDataset$VDC_Subscriptions <- numeric(nrow(finDataset))
-finDataset$Developer_Subscriptions <- numeric(nrow(finDataset))
-finDataset$NFR_Subscriptions <- numeric(nrow(finDataset))
-finDataset$RHEL_Eval_Subs_Months <- numeric(nrow(finDataset))
+TrainDataset$Checkin_OverDep             <- numeric(nrow(TrainDataset))
+TrainDataset$yum_mrepo_Spacewalk_cobbler <- numeric(nrow(TrainDataset))
+TrainDataset$VDC_Subscriptions           <- numeric(nrow(TrainDataset))
+TrainDataset$Developer_Subscriptions     <- numeric(nrow(TrainDataset))
+TrainDataset$NFR_Subscriptions           <- numeric(nrow(TrainDataset))
+TrainDataset$RHEL_Eval_Subs_Months       <- numeric(nrow(TrainDataset))
+TrainDataset$Views                       <- numeric(nrow(TrainDataset))
+TrainDataset$Cases                       <- numeric(nrow(TrainDataset))
 
-for(i in 1:nrow(finDataset)) #Looping through each account of the SFDC extract
+
+for(i in 1:1) #Looping through each account of the SFDC extract
 {
-  tmpAcc <- finDataset[i,2]
-  dt <- mdy(finDataset[i,4])-30 #Assuming opportunity has been created one month later
+  tmpAcc <- TrainDataset[i,2]
+  dt <- mdy(TrainDataset[i,3])-30 #Assuming opportunity has been created one month later
+  dt90 <- as.Date(dt,"%y-%m-%d")-90
   
   tmpSub <- subQuery(tmpAcc)
-  tmpSub <- subset(tmpSub,tmpSub$service_start_date < dt & tmpSub$service_end_date >= dt)
+  tmpSub <- subset(tmpSub,tmpSub$service_start_date <= dt & tmpSub$service_end_date >= dt90)
   
   tmpChk <- chkQuery(tmpAcc)
   tmpChk$system_last_checkin_date <- ymd(tmpChk$system_last_checkin_date)
@@ -279,7 +266,7 @@ for(i in 1:nrow(finDataset)) #Looping through each account of the SFDC extract
   
   if(nrow(tmpChk)==0)
   {
-    finDataset[i,6] <- 0
+    TrainDataset[i,6] <- 0
   }
   else
   {
@@ -290,11 +277,11 @@ for(i in 1:nrow(finDataset)) #Looping through each account of the SFDC extract
     
     if(nrow(tmpChk)==0)
     {
-      finDataset[i,6] <- 0
+      TrainDataset[i,6] <- 0
     }
     else
     {
-      mul <- multiplier(tmpSub)
+      mul <- 0 #multiplier(tmpSub)
       tmpChk$Consider <- NA
       for(j in 1:nrow(tmpChk))
       {
@@ -302,10 +289,9 @@ for(i in 1:nrow(finDataset)) #Looping through each account of the SFDC extract
         {tmpChk[j,8]='Y'}
         else {tmpChk[j,8]='N'}
       }
-      #if(length(tmpChk$Consider[tmpChk$Consider!="N"])>=10) {finDataset[i,6] <- "Y"} else {finDataset[i,6] <- "N"}
       ifelse(length(tmpChk$Consider[tmpChk$Consider!="N"]) - sum(mul) <= 0,
-             finDataset[i,6] <- 0,
-             finDataset[i,6] <- length(tmpChk$Consider[tmpChk$Consider!="N"]) - sum(mul))
+             TrainDataset[i,6] <- 0,
+             TrainDataset[i,6] <- length(tmpChk$Consider[tmpChk$Consider!="N"]) - sum(mul))
       
     }
   }
@@ -314,7 +300,7 @@ for(i in 1:nrow(finDataset)) #Looping through each account of the SFDC extract
   
   if(nrow(tmpChk)==0)
   {
-    finDataset[i,7] <- 0
+    TrainDataset[i,7] <- 0
   }
   else
   {
@@ -324,7 +310,7 @@ for(i in 1:nrow(finDataset)) #Looping through each account of the SFDC extract
     c <- grepl("spacewalk",tmpChk$hostname,ignore.case = TRUE)
     d <- grepl("cobbler",tmpChk$hostname,ignore.case = TRUE)
     if(any(c(a,b,c,d))) {tmpChk$yum_mrepo <- "Y"} else {tmpChk$yum_mrepo <- "N"}
-    if(length(tmpChk$yum_mrepo[tmpChk$yum_mrepo!="N"]) > 0) {finDataset[i,7] <- 1} else {finDataset[i,7] <- 0}
+    if(length(tmpChk$yum_mrepo[tmpChk$yum_mrepo!="N"]) > 0) {TrainDataset[i,7] <- 1} else {TrainDataset[i,7] <- 0}
   }
   
   #------------------------------- Number of VDC Subscriptions ------------------------------------
@@ -334,7 +320,7 @@ for(i in 1:nrow(finDataset)) #Looping through each account of the SFDC extract
   {
     VDC_Count <- ifelse(grepl("Virtual Datacenters",tmpSub$sku_desc), tmpSub$sku_qty, 0)
   }
-  finDataset[i,8] <- sum(VDC_Count)
+  TrainDataset[i,8] <- sum(VDC_Count)
   
   #------------------------------- Number of Developer Subscriptions -------------------------------
   
@@ -343,7 +329,7 @@ for(i in 1:nrow(finDataset)) #Looping through each account of the SFDC extract
   {
     Developer_Count <- ifelse(grepl("Developer",tmpSub$sku_desc), tmpSub$sku_qty, 0)
   }
-  finDataset[i,9] <- sum(Developer_Count)
+  TrainDataset[i,9] <- sum(Developer_Count)
   
   #------------------------------- Number of NFR Subscriptions -------------------------------------
   
@@ -352,32 +338,165 @@ for(i in 1:nrow(finDataset)) #Looping through each account of the SFDC extract
   {
     NFR_Count <- ifelse(grepl("NFR",tmpSub$sku_desc), tmpSub$sku_qty, 0)
   }
-  finDataset[i,10] <- sum(NFR_Count)
+  TrainDataset[i,10] <- sum(NFR_Count)
   
   #------------------------------- Months of Eval Subscription Usage -------------------------------
   
   EVAL_Subs <- 0
   if(nrow(tmpSub)>0)
   {
-    EVAL_Subs <- ifelse(grepl("Red Hat Enterprise Linux Server",tmpSub$sku_desc) & grepl("Evaluation",tmpSub$sku_desc)==TRUE,
+    EVAL_Subs <- ifelse(grepl("Evaluation",tmpSub$sku_desc)==TRUE,
                         round(time_length(interval(ymd(tmpSub$service_start_date),ymd(tmpSub$service_end_date)),"month"),0)*tmpSub$sku_qty,
                         0)
   }
-  finDataset[i,11] <- sum(EVAL_Subs)
+  TrainDataset[i,11] <- sum(EVAL_Subs)
+  
+  
+  #------------------------------- Number of Views -------------------------------------------------
+  
+  views <- chkViews(tmpAcc,dt)
+  if(is.na(views)) TrainDataset[1,12] <- 0 else TrainDataset[i,12] <- views
+  
+  #------------------------------- Number of Cases--------------------------------------------------
+  
+  cases <- chkCases(tmpAcc,dt)
+  TrainDataset[i,13] <- cases
+  
+  
 }
 
-#-------------------------------- Reorder Dataset ------------------------------------------------
+#------------------------------- Reorder Dataset ---------------------------------------------------
+TrainDataset <- TrainDataset[,c(1,2,4,3,6,8,9,10,11,12,13,7,5)]
 
-finDataset <- finDataset[,c(1,2,3,4,6,8,9,10,11,7,5)]
 
-#-------------------------------- Convert to Numeric ---------------------------------------------
+#Read Accounts from Subscription Table -------- TEST DATASET --------------
 
-#finDataset[5:9] <- lapply(finDataset[5:9],as.numeric)
+TestDataset <- read.csv("C:/Users/beapen/Documents/Process Related/PROJECT/Accounts.csv")
+levels <- levels(TestDataset$Geo)
+levels[length(levels)+1] <- "NA"
+TestDataset$Geo <- factor(TestDataset$Geo,levels = levels)
+TestDataset$Geo[is.na(TestDataset$Geo)] <- "NA"
 
-fd1 <- finDataset[-10]
-fd1 <- fd1[-8]
+#----------------Initialiation-----------------
+TestDataset$Checkin_OverDep             <- numeric(nrow(TestDataset))
+TestDataset$VDC_Subscriptions           <- numeric(nrow(TestDataset))
+TestDataset$Developer_Subscriptions     <- numeric(nrow(TestDataset))
+TestDataset$NFR_Subscriptions           <- numeric(nrow(TestDataset))
+TestDataset$RHEL_Eval_Subs_Months       <- numeric(nrow(TestDataset))
+TestDataset$Views                       <- numeric(nrow(TestDataset))
+TestDataset$Cases                       <- numeric(nrow(TestDataset))
+TestDataset$yum_mrepo_Spacewalk_cobbler <- numeric(nrow(TestDataset))
 
-fd1$Chk <- fd1$Checkin_OverDep + fd1$VDC_Subscriptions + fd1$Developer_Subscriptions + fd1$RHEL_Eval_Subs_Months
-
-fd1 <- fd1[fd1$Chk!=0,]
-fd1 <- fd1[-10]
+for(i in 1743:nrow(TestDataset)) #Looping through each account of subscription data
+{
+  tmpAcc <- TestDataset[i,1]
+  dt_st <- mdy('12/15/2017')
+  dt_en <- mdy('03/14/2017')
+  
+  tmpSub <- subQuery(tmpAcc)
+  tmpSub <- subset(tmpSub,tmpSub$service_start_date <= dt_en & tmpSub$service_end_date >= dt_st)
+  
+  tmpChk <- chkQuery(tmpAcc)
+  tmpChk$system_last_checkin_date <- ymd(tmpChk$system_last_checkin_date)
+  tmpChk$profile_create_date <- as.Date(tmpChk$profile_create_date)
+  
+  #------------------------------- 3 Month Checkin OverDeployment ---------------------------------
+  
+  if(nrow(tmpChk)==0)
+  {
+    TestDataset[i,3] <- 0
+  }
+  else
+  {
+    tmpChk <- CleanCheckin(tmpChk)
+    
+    tmpChk <- subset(tmpChk,between(as.Date(tmpChk$system_last_checkin_date,"%y-%m-%d"),dt_st,dt_en))
+    
+    if(nrow(tmpChk)==0)
+    {
+      TestDataset[i,3] <- 0
+    }
+    else
+    {
+      mul <- 0 #multiplier(tmpSub)
+      tmpChk$Consider <- NA
+      for(j in 1:nrow(tmpChk))
+      {
+        if(tmpChk[j,5]>=max(tmpChk$profile_create_date[tmpChk$hostname==tmpChk[j,2]]))
+        {tmpChk[j,8]='Y'}
+        else {tmpChk[j,8]='N'}
+      }
+      ifelse(length(tmpChk$Consider[tmpChk$Consider!="N"]) - sum(mul) <= 0,
+             TestDataset[i,3] <- 0,
+             TestDataset[i,3] <- length(tmpChk$Consider[tmpChk$Consider!="N"]) - sum(mul))
+      
+    }
+  }
+  
+  #------------------------------- Number of VDC Subscriptions ------------------------------------
+  
+  VDC_Count <- 0
+  if(nrow(tmpSub)>0)
+  {
+    VDC_Count <- ifelse(grepl("Virtual Datacenters",tmpSub$sku_desc), tmpSub$sku_qty, 0)
+  }
+  TestDataset[i,4] <- sum(VDC_Count)
+  
+  #------------------------------- Number of Developer Subscriptions -------------------------------
+  
+  Developer_Count <- 0
+  if(nrow(tmpSub)>0)
+  {
+    Developer_Count <- ifelse(grepl("Developer",tmpSub$sku_desc), tmpSub$sku_qty, 0)
+  }
+  TestDataset[i,5] <- sum(Developer_Count)
+  
+  #------------------------------- Number of NFR Subscriptions -------------------------------------
+  
+  NFR_Count <- 0
+  if(nrow(tmpSub)>0)
+  {
+    NFR_Count <- ifelse(grepl("NFR",tmpSub$sku_desc), tmpSub$sku_qty, 0)
+  }
+  TestDataset[i,6] <- sum(NFR_Count)
+  
+  #------------------------------- Months of Eval Subscription Usage -------------------------------
+  
+  EVAL_Subs <- 0
+  if(nrow(tmpSub)>0)
+  {
+    EVAL_Subs <- ifelse(grepl("Evaluation",tmpSub$sku_desc)==TRUE,
+                        round(time_length(interval(ymd(tmpSub$service_start_date),ymd(tmpSub$service_end_date)),"month"),0)*tmpSub$sku_qty,
+                        0)
+  }
+  TestDataset[i,7] <- sum(EVAL_Subs)
+  
+  #------------------------------- Number of Views -------------------------------------------------
+  
+  views <- chkViews(tmpAcc,dt_st)
+  if(is.na(views)) TestDataset[1,8] <- 0 else TestDataset[i,8] <- views
+  
+  #------------------------------- Number of Cases--------------------------------------------------
+  
+  cases <- chkCases(tmpAcc,dt_st)
+  TestDataset[i,9] <- cases
+  
+  #------------------------------- Presence of YUM/MRepo/Spacewalk/Cobbler Servers ------------------
+  
+  if(nrow(tmpChk)==0)
+  {
+    TestDataset[i,4] <- 0
+  }
+  else
+  {
+    tmpChk$yum_mrepo <- NA
+    a <- grepl("yum",tmpChk$hostname,ignore.case = TRUE)
+    b <- grepl("mrepo",tmpChk$hostname,ignore.case = TRUE)
+    c <- grepl("spacewalk",tmpChk$hostname,ignore.case = TRUE)
+    d <- grepl("cobbler",tmpChk$hostname,ignore.case = TRUE)
+    if(any(c(a,b,c,d))) {tmpChk$yum_mrepo <- "Y"} else {tmpChk$yum_mrepo <- "N"}
+    if(length(tmpChk$yum_mrepo[tmpChk$yum_mrepo!="N"]) > 0) {TestDataset[i,10] <- 1} else {TestDataset[i,10] <- 0}
+  }
+  
+ 
+}
